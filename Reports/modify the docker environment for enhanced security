@@ -1,0 +1,168 @@
+Security Weaknesses Found in Scanning
+
+Weak MySQL credentials (root:1234) → Hydra cracked it easily.
+
+Exposed MySQL to public network (0.0.0.0:3306) → accessible from anywhere.
+
+All services exposed to 0.0.0.0 (Python app, Java app, Apache webserver).
+
+No network segmentation → all containers can talk to each other.
+
+No encryption → MySQL traffic is plaintext, HTTP traffic is unencrypted.
+
+Containers running as root user by default → privilege escalation risk.
+
+🛠️ Fixes / Enhanced Docker Environment
+1. Use Strong Credentials & Secrets Management
+
+Replace weak password 1234 with a strong password.
+
+Use Docker secrets instead of hardcoding in docker-compose.yml.
+
+secrets:
+  mysql_root_password:
+    file: ./secrets/mysql_root_password.txt
+
+
+Then reference it in MySQL service:
+
+services:
+  mysql_db:
+    image: mysql:8.0
+    container_name: mysql_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    secrets:
+      - mysql_root_password
+    networks:
+      - labnet
+    expose:
+      - "3306"
+
+
+🔐 This way the password is not stored in plain text.
+
+2. Restrict MySQL Exposure
+
+Instead of publishing MySQL to the internet:
+
+❌ Current (bad):
+
+ports:
+  - "3306:3306"
+
+
+✅ Secure (only accessible inside Docker network):
+
+expose:
+  - "3306"
+
+
+This way, only the Python/Java containers can access MySQL, not the outside world.
+
+3. Enforce HTTPS for Webserver
+
+Use nginx + certbot (Let’s Encrypt) instead of plain Apache.
+
+Redirect HTTP → HTTPS.
+
+Example for self-signed certs (inside Dockerfile):
+
+RUN apt-get update && apt-get install -y openssl
+RUN mkdir /etc/apache2/ssl
+RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/apache2/ssl/apache.key \
+  -out /etc/apache2/ssl/apache.crt \
+  -subj "/C=US/ST=NY/L=NYC/O=DockerLab/OU=IT/CN=example.com"
+
+
+Then enable SSL in Apache conf:
+
+a2enmod ssl
+a2ensite default-ssl
+
+4. Run Containers as Non-Root
+
+In each Dockerfile, add:
+
+RUN adduser --disabled-password --gecos '' appuser
+USER appuser
+
+
+This ensures if container is compromised, attacker doesn’t get root access.
+
+5. Network Segmentation
+
+Use multiple networks:
+
+frontend_net → webserver only
+
+backend_net → python/java + mysql
+
+Example:
+
+networks:
+  frontend_net:
+    driver: bridge
+  backend_net:
+    driver: bridge
+
+
+Then assign services accordingly:
+
+services:
+  webserver:
+    networks:
+      - frontend_net
+  python_app:
+    networks:
+      - backend_net
+  java_app:
+    networks:
+      - backend_net
+  mysql_db:
+    networks:
+      - backend_net
+
+
+This prevents the webserver from talking directly to MySQL.
+
+6. Enable MySQL SSL
+
+To protect data in transit, configure MySQL with SSL certificates:
+
+environment:
+  MYSQL_SSL_CA: /etc/mysql/ssl/ca.pem
+  MYSQL_SSL_CERT: /etc/mysql/ssl/server-cert.pem
+  MYSQL_SSL_KEY: /etc/mysql/ssl/server-key.pem
+
+
+Generate certs and mount them into the container via volumes.
+
+7. Resource & Restart Limits
+
+Prevent DoS by limiting CPU/RAM:
+
+deploy:
+  resources:
+    limits:
+      cpus: "0.5"
+      memory: 512M
+restart: always
+
+🔑 Summary of Enhancements
+
+✅ Strong passwords stored as Docker secrets
+
+✅ MySQL restricted to internal access only
+
+✅ Webserver upgraded to HTTPS
+
+✅ Containers run as non-root
+
+✅ Separate networks (frontend vs backend)
+
+✅ MySQL with SSL enabled
+
+✅ Resource limits added
